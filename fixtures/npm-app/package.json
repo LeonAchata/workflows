@@ -1,0 +1,13 @@
+{
+  "name": "fixture-npm-app",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "node --check src/greet.js",
+    "test": "node --test",
+    "build": "node build.js"
+  },
+  "devDependencies": {
+    "picocolors": "^1.1.1"
+  }
+}

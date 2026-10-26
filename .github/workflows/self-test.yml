@@ -1,0 +1,79 @@
+# Tests this repository's reusable workflows by calling them exactly the way
+# another repository would, against the fixtures in fixtures/.
+
+name: Self-test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: self-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  actionlint:
+    name: Lint workflows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: actionlint
+        run: |
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
+          ./actionlint -color
+
+  npm:
+    name: node-checks · npm
+    uses: ./.github/workflows/node-checks.yml
+    with:
+      working-directory: fixtures/npm-app
+      scripts: lint test build
+      artifact-path: dist
+      artifact-name: npm-app
+
+  pnpm:
+    name: node-checks · pnpm
+    uses: ./.github/workflows/node-checks.yml
+    with:
+      working-directory: fixtures/pnpm-app
+      node-version: "24"
+      scripts: lint test build
+      env: |
+        # comments and blank lines are ignored
+
+        GREETING=pnpm
+      artifact-path: dist
+      artifact-name: pnpm-app
+
+  verify-outputs:
+    name: Verify outputs
+    needs: [npm, pnpm]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+      - name: Package manager detection
+        run: |
+          test "${{ needs.npm.outputs.package-manager }}" = npm
+          test "${{ needs.pnpm.outputs.package-manager }}" = pnpm
+      - name: Artifacts contain the build, built with the extra env
+        run: |
+          grep -q 'Hello, CI!' npm-app/index.html
+          grep -q 'Hello, pnpm!' pnpm-app/index.html
+
+  http-smoke:
+    name: http-smoke · github.com
+    uses: ./.github/workflows/http-smoke.yml
+    with:
+      base-url: https://github.com
+      wait-for-path: /LeonAchata/workflows
+      wait-for-text: LeonAchata
+      checks: |
+        # status, body text, redirect target
+        200 /LeonAchata/workflows LeonAchata
+        404 /LeonAchata/this-repo-does-not-exist
+        302 /settings/profile https://github.com/login

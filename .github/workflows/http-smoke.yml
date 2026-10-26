@@ -1,0 +1,129 @@
+# Reusable smoke test for a live site: waits until a new deploy is actually
+# serving, then checks status codes, page content and redirects with curl.
+# Works with any host (Hostinger, cPanel, a VPS, Vercel…) because it only talks HTTP.
+
+name: HTTP smoke
+
+on:
+  workflow_call:
+    inputs:
+      base-url:
+        description: Site to test, e.g. https://example.com
+        type: string
+        required: true
+      checks:
+        description: |
+          One check per line: STATUS PATH [TEXT]. TEXT must appear in the body,
+          or in the Location header for 3xx responses. Lines starting with # are ignored.
+        type: string
+        required: true
+      wait-for-path:
+        description: Before checking, poll this path until its body contains wait-for-text (e.g. a version endpoint that returns the commit SHA).
+        type: string
+        default: ""
+      wait-for-text:
+        description: Text that proves the new deploy is live, usually github.sha.
+        type: string
+        default: ""
+      wait-timeout:
+        description: Seconds to keep polling before giving up.
+        type: number
+        default: 900
+      delay:
+        description: Fixed seconds to wait before checking, for hosts with no way to detect the new version.
+        type: number
+        default: 0
+
+permissions: {}
+
+jobs:
+  smoke:
+    name: HTTP smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      BASE_URL: ${{ inputs.base-url }}
+    steps:
+      - name: Wait for the new deploy
+        if: inputs.delay > 0 || inputs.wait-for-path != ''
+        env:
+          DELAY: ${{ inputs.delay }}
+          WAIT_PATH: ${{ inputs.wait-for-path }}
+          WAIT_TEXT: ${{ inputs.wait-for-text }}
+          WAIT_TIMEOUT: ${{ inputs.wait-timeout }}
+        run: |
+          base="${BASE_URL%/}"
+          if [ "$DELAY" -gt 0 ]; then
+            echo "Waiting ${DELAY}s before checking"
+            sleep "$DELAY"
+          fi
+          if [ -z "$WAIT_PATH" ]; then exit 0; fi
+
+          if [ -z "$WAIT_TEXT" ]; then
+            echo "::error::wait-for-path is set but wait-for-text is empty"
+            exit 1
+          fi
+
+          deadline=$(( $(date +%s) + WAIT_TIMEOUT ))
+          # Download to a file, not a pipe: with pipefail, grep -q closing the pipe early fails curl
+          until curl -fsS --max-time 15 -H 'Cache-Control: no-cache' -o wait.txt "$base$WAIT_PATH" 2>/dev/null \
+            && grep -qF -- "$WAIT_TEXT" wait.txt; do
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::$base$WAIT_PATH never contained '$WAIT_TEXT' after ${WAIT_TIMEOUT}s. Did the deploy run?"
+              exit 1
+            fi
+            echo "Not live yet, retrying in 15s"
+            sleep 15
+          done
+          echo "New deploy is live"
+
+      - name: Run checks
+        env:
+          CHECKS: ${{ inputs.checks }}
+        run: |
+          base="${BASE_URL%/}"
+          failures=0
+          {
+            echo "### HTTP smoke · $base"
+            echo ""
+            echo "| Check | Result |"
+            echo "| --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          while IFS= read -r line; do
+            line="${line#"${line%%[![:space:]]*}"}"
+            case "$line" in ''|'#'*) continue ;; esac
+            read -r expected path text <<< "$line"
+
+            # Retry the status code: a CDN or a cold start can fail once
+            for attempt in 1 2 3; do
+              code=$(curl -sS -o body.txt -D headers.txt -w '%{http_code}' --max-time 20 \
+                -H 'Cache-Control: no-cache' "$base$path") || code=000
+              if [ "$code" = "$expected" ] || [ "$attempt" -eq 3 ]; then break; fi
+              sleep 5
+            done
+
+            result="✅"
+            if [ "$code" != "$expected" ]; then
+              result="❌ got $code"
+            elif [ -n "$text" ]; then
+              case "$expected" in
+                3*) grep -i '^location:' headers.txt > haystack.txt || true ;;
+                *) cp body.txt haystack.txt ;;
+              esac
+              grep -qF -- "$text" haystack.txt || result="❌ missing \"$text\""
+            fi
+
+            echo "| \`$expected $path\`${text:+ · $text} | $result |" >> "$GITHUB_STEP_SUMMARY"
+            if [ "$result" = "✅" ]; then
+              echo "✅ $expected $path ${text}"
+            else
+              echo "::error::$expected $path ${text} → ${result#❌ }"
+              failures=$((failures + 1))
+            fi
+          done <<< "$CHECKS"
+
+          if [ "$failures" -gt 0 ]; then
+            echo "$failures check(s) failed"
+            exit 1
+          fi

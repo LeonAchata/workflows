@@ -1,0 +1,10 @@
+version: 2
+updates:
+  # Keeps every action pinned in the workflows current; callers inherit the bumps
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

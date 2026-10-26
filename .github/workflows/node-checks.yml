@@ -1,0 +1,170 @@
+# Reusable CI for any Node.js web project: install, run the project's own
+# scripts in order, audit production dependencies, and optionally hand the build
+# output to a later job (e.g. a deploy).
+#
+# The package manager (npm or pnpm) and the Node.js version (.nvmrc /
+# .node-version) are detected from the project, so most callers need no inputs.
+
+name: Node checks
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Folder that holds package.json, relative to the repository root.
+        type: string
+        default: "."
+      node-version:
+        description: Node.js version used when the project has no .nvmrc or .node-version file.
+        type: string
+        default: "22"
+      scripts:
+        description: package.json scripts to run, in order, separated by spaces. Execution stops at the first failure.
+        type: string
+        default: "lint build"
+      audit-level:
+        description: Fail on production dependency vulnerabilities at or above this level (low, moderate, high, critical). Empty to skip.
+        type: string
+        default: "high"
+      env:
+        description: Extra non-secret environment variables for the scripts, one KEY=VALUE per line (e.g. NEXT_PUBLIC_* values inlined at build time).
+        type: string
+        default: ""
+      artifact-path:
+        description: Build output to upload as an artifact (e.g. dist), relative to working-directory. Empty to skip.
+        type: string
+        default: ""
+      artifact-name:
+        description: Name of the uploaded artifact.
+        type: string
+        default: "build"
+    outputs:
+      package-manager:
+        description: The detected package manager (npm or pnpm).
+        value: ${{ jobs.checks.outputs.package-manager }}
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Node checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      package-manager: ${{ steps.detect.outputs.pm }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Detect project setup
+        id: detect
+        env:
+          WORKDIR: ${{ inputs.working-directory }}
+          NODE_VERSION: ${{ inputs.node-version }}
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            pm=pnpm; lockfile=pnpm-lock.yaml; install="pnpm install --frozen-lockfile"
+          elif [ -f package-lock.json ]; then
+            pm=npm; lockfile=package-lock.json; install="npm ci"
+          else
+            echo "::error::No pnpm-lock.yaml or package-lock.json in '$WORKDIR'. Commit a lockfile so installs are reproducible."
+            exit 1
+          fi
+
+          # A version file in the project wins over the input
+          node_file=""
+          for f in .nvmrc .node-version; do
+            if [ -f "$f" ]; then node_file="$WORKDIR/$f"; break; fi
+          done
+
+          {
+            echo "pm=$pm"
+            echo "lockfile=$WORKDIR/$lockfile"
+            echo "install=$install"
+            echo "node-file=$node_file"
+            if [ -z "$node_file" ]; then echo "node-version=$NODE_VERSION"; fi
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Package manager: $pm · Node: ${node_file:-$NODE_VERSION}"
+
+      - if: steps.detect.outputs.pm == 'pnpm'
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: ${{ inputs.working-directory }}/package.json
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ steps.detect.outputs.node-version }}
+          node-version-file: ${{ steps.detect.outputs.node-file }}
+          cache: ${{ steps.detect.outputs.pm }}
+          cache-dependency-path: ${{ steps.detect.outputs.lockfile }}
+
+      - name: Load extra environment
+        if: inputs.env != ''
+        env:
+          EXTRA_ENV: ${{ inputs.env }}
+        run: |
+          printf '%s\n' "$EXTRA_ENV" | while IFS= read -r line; do
+            case "$line" in ''|'#'*) continue ;; esac
+            case "$line" in
+              *=*) echo "$line" >> "$GITHUB_ENV"; echo "set ${line%%=*}" ;;
+              *) echo "::error::Invalid env line (expected KEY=VALUE): $line"; exit 1 ;;
+            esac
+          done
+
+      - name: Install dependencies
+        run: ${{ steps.detect.outputs.install }}
+
+      - name: Run scripts
+        env:
+          PM: ${{ steps.detect.outputs.pm }}
+          SCRIPTS: ${{ inputs.scripts }}
+          WORKDIR: ${{ inputs.working-directory }}
+        run: |
+          {
+            echo "### Node checks · \`$WORKDIR\`"
+            echo ""
+            echo "| Script | Result | Time |"
+            echo "| --- | --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          for script in $SCRIPTS; do
+            echo "::group::$PM run $script"
+            start=$(date +%s)
+            if "$PM" run "$script"; then status=0; else status=$?; fi
+            elapsed=$(( $(date +%s) - start ))
+            echo "::endgroup::"
+
+            if [ "$status" -eq 0 ]; then
+              echo "| \`$script\` | ✅ passed | ${elapsed}s |" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "| \`$script\` | ❌ failed | ${elapsed}s |" >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::'$PM run $script' failed with exit code $status"
+              exit "$status"
+            fi
+          done
+
+      # Only production dependencies: a vulnerable dev tool does not ship to visitors
+      - name: Audit production dependencies
+        if: inputs.audit-level != ''
+        env:
+          PM: ${{ steps.detect.outputs.pm }}
+          LEVEL: ${{ inputs.audit-level }}
+        run: |
+          if [ "$PM" = pnpm ]; then
+            pnpm audit --prod --audit-level "$LEVEL"
+          else
+            npm audit --omit=dev --audit-level="$LEVEL"
+          fi
+
+      - name: Upload build output
+        if: inputs.artifact-path != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.working-directory }}/${{ inputs.artifact-path }}
+          if-no-files-found: error
+          retention-days: 7

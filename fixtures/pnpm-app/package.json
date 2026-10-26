@@ -1,0 +1,14 @@
+{
+  "name": "fixture-pnpm-app",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.6",
+  "scripts": {
+    "lint": "node --check src/greet.js",
+    "test": "node --test",
+    "build": "node build.js"
+  },
+  "devDependencies": {
+    "picocolors": "^1.1.1"
+  }
+}
