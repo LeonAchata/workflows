@@ -38,6 +38,10 @@ on:
         description: Name of the uploaded artifact.
         type: string
         default: "build"
+      artifact-include-hidden:
+        description: Keep dotfiles in the artifact (.htaccess, .well-known). upload-artifact drops them unless told otherwise.
+        type: boolean
+        default: true
     outputs:
       package-manager:
         description: The detected package manager (npm or pnpm).
@@ -167,4 +171,5 @@ jobs:
           name: ${{ inputs.artifact-name }}
           path: ${{ inputs.working-directory }}/${{ inputs.artifact-path }}
           if-no-files-found: error
+          include-hidden-files: ${{ inputs.artifact-include-hidden }}
           retention-days: 7

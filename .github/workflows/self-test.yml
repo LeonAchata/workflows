@@ -60,10 +60,11 @@ jobs:
         run: |
           test "${{ needs.npm.outputs.package-manager }}" = npm
           test "${{ needs.pnpm.outputs.package-manager }}" = pnpm
-      - name: Artifacts contain the build, built with the extra env
+      - name: Artifacts contain the build, with the extra env and dotfiles
         run: |
           grep -q 'Hello, CI!' npm-app/index.html
           grep -q 'Hello, pnpm!' pnpm-app/index.html
+          test -f npm-app/.htaccess && test -f pnpm-app/.htaccess
 
   http-smoke:
     name: http-smoke · github.com

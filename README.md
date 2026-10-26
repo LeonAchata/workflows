@@ -78,6 +78,7 @@ and fails on high-severity vulnerabilities in production dependencies.
 | `env` | | Extra non-secret variables, one `KEY=VALUE` per line. Useful for values inlined at build time, such as `NEXT_PUBLIC_*`. |
 | `artifact-path` | | Build output to upload, e.g. `dist`. Empty to skip. |
 | `artifact-name` | `build` | Name of that artifact. |
+| `artifact-include-hidden` | `true` | Keep dotfiles such as `.htaccess` in the artifact. `upload-artifact` drops them by default, which for an Apache/LiteSpeed host means deploying a site without its rewrite rules. |
 
 | Output | Description |
 | --- | --- |
@@ -203,7 +204,7 @@ jobs:
         200 /contact
 ```
 
-The build that's deployed is the exact one that passed the checks: it's built once and passed along as an artifact.
+The build that's deployed is the exact one that passed the checks: it's built once and passed along as an artifact, `.htaccess` included.
 
 </details>
 
