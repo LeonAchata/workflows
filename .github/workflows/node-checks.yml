@@ -57,7 +57,7 @@ jobs:
       run:
         working-directory: ${{ inputs.working-directory }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Detect project setup
         id: detect
@@ -91,11 +91,11 @@ jobs:
           echo "Package manager: $pm · Node: ${node_file:-$NODE_VERSION}"
 
       - if: steps.detect.outputs.pm == 'pnpm'
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           package_json_file: ${{ inputs.working-directory }}/package.json
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ steps.detect.outputs.node-version }}
           node-version-file: ${{ steps.detect.outputs.node-file }}
@@ -162,7 +162,7 @@ jobs:
 
       - name: Upload build output
         if: inputs.artifact-path != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.artifact-name }}
           path: ${{ inputs.working-directory }}/${{ inputs.artifact-path }}
